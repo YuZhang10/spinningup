@@ -26,7 +26,7 @@ class ActorCriticNet(nn.Module):
     
     def forward(self, obs):
         obs = torch.Tensor(obs).to(Device)
-        x = self.base_net(obs)
+        x = F.relu(self.base_net(obs))
         action_logits = F.softmax(self.pi(x), dim=-1)
         value = self.vf(x)
         return action_logits, value
@@ -36,32 +36,46 @@ class Agent(object):
         self.gamma = gamma
         self.AC = model
         self.optimizer = Adam(AC.parameters(), lr=lr)
-    
+        self.logp_as = []
+        self.values = []
+        self.rewards = []
+
     def choose_action(self, obs):
-        action_logits, _ = self.AC.forward(obs)
+        action_logits, value = self.AC(obs)
         distribution = Categorical(action_logits)
         action = distribution.sample()
-        self.log_probs = distribution.log_prob(action)
+        self.logp_as.append(distribution.log_prob(action))
+        self.values.append(value)
         return action.item()
     
-    def learn(self, obs, reward, next_obs, done, I):
+    def learn(self):
+
+        R = 0
+        policy_losses = []
+        value_losses = []
+        returns = []
+
+        for r in self.rewards[::-1]:
+            R = r + self.gamma * R
+            returns.insert(0, R)
+        returns = torch.tensor(returns).to(Device)
+        returns = (returns - returns.mean()) / (returns.std() + 0.00001)
+
+        for logp_a, value, R in zip(self.logp_as, self.values, returns):
+            advantage = R - value.item()
+            # calculate actor (policy) loss 
+            policy_losses.append(-logp_a * advantage)
+            # calculate critic (value) loss using L1 smooth loss
+            value_losses.append(F.smooth_l1_loss(value, torch.tensor([R]).to(Device)))
+
         self.optimizer.zero_grad()
-
-        _, value = self.AC.forward(obs)
-        _, next_value = self.AC.forward(next_obs)
-
-        # reward = torch.Tensor(reward).to(Device)
-        U = reward + self.gamma*(next_value if not done else 0)
-        pi_loss = -I*(U-value)*self.log_probs
-        value_loss = (U-value)**2
-
-        # delta = reward + self.gamma*(next_value if not done else 0) - value
-        # pi_loss = -self.log_probs * delta
-        # value_loss = delta**2
-
-        loss = pi_loss + value_loss
-        loss.backward()
+        loss = torch.stack(policy_losses).sum() + torch.stack(value_losses).sum()
+        loss.backward(retain_graph=True)
         self.optimizer.step()
+
+        self.rewards = []
+        self.values = []
+        self.logp_as = []
         
 
 # Build env
@@ -73,7 +87,7 @@ lr = 3e-2
 EPISODES=30000
 GAMMA = 0.99
 hidden_sizes = [128,128]
-show_every = 1000
+show_every = 100
 
 AC = ActorCriticNet(env.observation_space, env.action_space, hidden_sizes)
 agent = Agent(AC, lr=lr, gamma=GAMMA)
@@ -93,12 +107,6 @@ for episode in range(EPISODES):
     else:
         is_render = False
 
-    # Trajectories
-    episode_reward = []
-    episode_action = []
-    episode_obs = []
-    
-        
     while not done:
         # Render
         if is_render:
@@ -112,13 +120,14 @@ for episode in range(EPISODES):
 
         # Update obs
         obs = next_obs
+        agent.rewards.append(reward)
         T += 1
 
         # Logs
         episode_reward += reward
     
     # Learn once
-    agent.learn(obs, reward, next_obs, done, I)
+    agent.learn()
 
     # Update cumulative reward
     running_reward = 0.05 * episode_reward + (1 - 0.05) * running_reward
@@ -128,7 +137,3 @@ for episode in range(EPISODES):
         print("Solved! Running reward is now {} and "
                 "the last episode runs to {} time steps!".format(running_reward, T))
         break
-    
-    
-
-
