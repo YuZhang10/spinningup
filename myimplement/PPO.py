@@ -9,11 +9,6 @@ import numpy as np
 
 Device = torch.device("cuda:0")
 
-def normalize(x):
-    x -= x.mean()
-    x /= (x.std() + 1e-8)
-    return x
-
 class Agent(nn.Module):
     def __init__(self, 
         num_inputs, num_outputs, hidden_size,
@@ -36,12 +31,15 @@ class Agent(nn.Module):
         )
 
         # Log shape is [t, dim]
-        self.obs = []
+        self.states = []
         self.actions = []
         self.logp_as = []
         self.values = []
+
+        # Log as list
         self.rewards = []
         self.masks = []
+        
         # next_obs is the last obs
         self.next_obs = None
 
@@ -52,77 +50,64 @@ class Agent(nn.Module):
         value = self.critic(obs)
 
         return dist, value
-        
-    def choose_action(self, obs):
-        dist, value = self.forward(obs)
 
-        action = dist.sample()
-        self.obs.append(obs)
-        self.logp_as.append(dist.log_prob(action))
-        self.values.append(value)
-        self.actions.append(action)
-        return action.item()
+def normalize(x):
+    x -= x.mean()
+    x /= (x.std() + 1e-8)
+    return x
+
+def compute_gae(next_value:int, values, rewards, masks, gamma=0.99, lam=0.95):
+    values = values + [next_value]
+    gae = 0
+    returns = []
+    for t in range(len(rewards))[::-1]:
+        delta = rewards[t] + gamma*values[t+1]*masks[t] - values[t]
+        gae = delta + gamma*lam*gae*masks[t]
+        returns.insert(0, gae + values[t])
+    return returns
+      
+def ppo_iter(states, actions, log_probs, returns, advantage):
+    batch_size = states.size(0)
+    # generates random mini-batches until we have covered the full batch
+    for _ in range(batch_size // MINI_BATCH_SIZE):
+        rand_ids = np.random.randint(0, batch_size, MINI_BATCH_SIZE)
+        yield states[rand_ids, :], actions[rand_ids, :], log_probs[rand_ids, :], \
+            returns[rand_ids, :], advantage[rand_ids, :]
+
+def PPO_update(states, actions, log_probs, returns, advantages, eps=0.2):
+    for _ in range(EPOCHS):
+        # run EPOCHS time on current memeory
+        for mb_states, mb_actions, mb_old_log_probs, mb_returns, mb_advantages in ppo_iter(
+            states, actions, log_probs, returns, advantages):
+            # chosen actions
+            new_distributions, new_values = agent(mb_states)
+            new_logp_probs = new_distributions.log_prob(mb_actions.squeeze(-1))
+            # old log probability of each action
+            ratios = (new_logp_probs.unsqueeze(-1) - mb_old_log_probs).exp()
+
+            p1 = ratios * mb_advantages
+            p2 = torch.clamp(ratios, 1-eps, 1+eps)*mb_advantages
+            pi_loss = -torch.min(p1, p2).mean()
+            value_loss = (mb_returns - new_values).pow(2).mean()
+            loss = value_loss + pi_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
     
-    def compute_gae(self, values, rewards, masks):
-        gae = 0
-        returns = []
-        for t in range(len(rewards))[::-1]:
-            delta = rewards[t] + self.gamma*values[t+1]*masks[t] - values[t]
-            gae = delta + self.lam*gae*masks[t]
-            returns.insert(0, gae + values[t])
-        returns = torch.tensor(returns).to(Device)
-        returns = normalize(returns)
-        return returns
-        
-    def learn(self):
-        # old log probability of each action
-        old_logp_as = self.logp_as.detach()
-        # chosen actions
-        actions = self.actions.detach()
-
-        new_distributions, new_values = self.forward(self.obs)
-        new_logp_as = new_distributions.log_prob(actions)
-        ratio = (new_logp_as - old_logp_as).exp()
-
-        _, next_value = self.forward(self.next_obs)
-        new_values = new_values.squeeze(-1)
-        returns = self.compute_gae(
-            torch.cat((new_values,next_value)), 
-            self.rewards, 
-            self.masks)
-        returns = returns.detach()
-        advantages = returns - new_values
-        advantages = normalize(advantages)
-        advantages = advantages.detach()
-
-        p1 = ratio * advantages
-        p2 = torch.clamp(ratio, 1-self.eps, 1+self.eps)*advantages
-        pi_loss = -torch.min(p1,p2).mean()
-        value_loss = (returns - new_values).pow(2).mean()
-        loss = value_loss + pi_loss
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        self.obs = []
-        self.actions = []
-        self.logp_as = []
-        self.values = []
-        self.rewards = []
-        self.masks = []
-        self.next_obs = None
-        
 # Build env
 env = gym.make('CartPole-v1')
 state = env.reset()
 
 # Learning setting
-lr = 1e-3
-EPISODES=30000
+lr = 1e-2
+EPISODES=500
 GAMMA = 0.99
 hidden_sizes = 128
-show_every = 100
+EPOCHS = 10
+PPO_STEPS = 1024 # get 256 trajectory steps
+MINI_BATCH_SIZE = 64 # caculate loss on one mini batch
+show_every = 20
 obs_dim = env.observation_space.shape[0]
 action_dim = env.action_space.n
 
@@ -132,10 +117,16 @@ optimizer = Adam(agent.parameters(), lr=lr)
 for episode in range(EPISODES):
     # For every episode init
     done = False
-    obs = env.reset()
-    T = 0
+    state = env.reset()
 
-    # Logs
+    # Init memeory
+    masks = []
+    rewards = []
+    states = []
+    actions = []
+    values = []
+    log_probs = []
+
     episode_reward = 0
     running_reward = 0
     if episode % show_every == 0:
@@ -143,41 +134,55 @@ for episode in range(EPISODES):
     else:
         is_render = False
 
-    while not done:
+    for _ in range(PPO_STEPS):
         # Render
-        if is_render:
-            env.render("human")
+        # if is_render:
+        #     env.render("human")
         
         # Add extra dim for cat
-        obs = torch.FloatTensor(obs).unsqueeze(0).to(Device)
+        state = torch.FloatTensor(state).unsqueeze(0).to(Device)
 
         # Predict action and value
-        action = agent.choose_action(obs)
-
+        dist, value = agent(state)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        
         # Step the env
-        next_obs, reward, done, _ = env.step(action)
-
-        # Update obs
-        obs = next_obs
-        T += 1
+        next_state, reward, done, _ = env.step(action.item())
 
         # Logs
-        agent.rewards.append(reward)
-        agent.masks.append(done)
+        log_probs.append(log_prob.unsqueeze(1).to(Device))
+        values.append(value)
+        rewards.append(torch.FloatTensor([reward]).unsqueeze(1).to(Device))
+        masks.append(torch.FloatTensor([1 - done]).unsqueeze(1).to(Device))
+        states.append(state)
+        actions.append(action.unsqueeze(1).to(Device))
         episode_reward += reward
     
-    agent.next_obs = torch.FloatTensor(next_obs).to(Device)
-    agent.obs = torch.cat(agent.obs)
-    agent.actions = torch.cat(agent.actions)
-    agent.logp_as = torch.cat(agent.logp_as)
+        # Update obs
+        state = next_state
+
+    _, next_value = agent(torch.FloatTensor(next_state).to(Device))
+
+    returns = compute_gae(next_value, values, rewards, masks)
+    returns = torch.cat(returns).detach()
+    returns = normalize(returns)
+    
+    states = torch.cat(states).detach()
+    actions = torch.cat(actions).detach()
+    log_probs = torch.cat(log_probs).detach()
+    values = torch.cat(values).detach()
+    
+    advantages = returns - values
+    advantages = normalize(advantages).detach()
 
     # Learn once
-    agent.learn()
+    PPO_update(states, actions, log_probs, returns, advantages)
 
     # Update cumulative reward
     running_reward = 0.05 * episode_reward + (1 - 0.05) * running_reward
     
-    print(f"episode_{episode} \t ep_reward = {episode_reward} \t ep_len = {T}")
+    print(f"episode_{episode} \t ep_reward = {episode_reward}")
     if running_reward > env.spec.reward_threshold:
         print("Solved! Running reward is now {} and "
                 "the last episode runs to {} time steps!".format(running_reward, T))
