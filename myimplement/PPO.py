@@ -12,7 +12,7 @@ Device = torch.device("cuda:0")
 class Agent(nn.Module):
     def __init__(self, 
         num_inputs, num_outputs, hidden_size,
-        gamma=0.99, lam=0.95):
+        gamma=0.99, lam=0.95, dropout=0.5,):
         super(Agent, self).__init__()
         self.gamma = gamma
         self.lam = lam
@@ -21,11 +21,13 @@ class Agent(nn.Module):
 
         self.critic = nn.Sequential(
             nn.Linear(num_inputs, hidden_size),
+            nn.Dropout(dropout),
             nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
         self.actor = nn.Sequential(
             nn.Linear(num_inputs, hidden_size),
+            nn.Dropout(dropout),
             nn.ReLU(),
             nn.Linear(hidden_size, num_outputs),
         )
@@ -86,7 +88,7 @@ def PPO_update(states, actions, log_probs, returns, advantages, eps=0.2):
             ratios = (new_logp_probs.unsqueeze(-1) - mb_old_log_probs).exp()
 
             p1 = ratios * mb_advantages
-            p2 = torch.clamp(ratios, 1-eps, 1+eps)*mb_advantages
+            p2 = torch.clamp(ratios, 1-eps, 1+eps) * mb_advantages
             pi_loss = -torch.min(p1, p2).mean()
             value_loss = (mb_returns - new_values).pow(2).mean()
             loss = value_loss + pi_loss
@@ -97,7 +99,6 @@ def PPO_update(states, actions, log_probs, returns, advantages, eps=0.2):
     
 # Build env
 env = gym.make('CartPole-v1')
-state = env.reset()
 
 # Learning setting
 lr = 1e-2
@@ -105,8 +106,8 @@ EPISODES=500
 GAMMA = 0.99
 hidden_sizes = 128
 EPOCHS = 10
-PPO_STEPS = 1024 # get 256 trajectory steps
-MINI_BATCH_SIZE = 64 # caculate loss on one mini batch
+PPO_STEPS = 256 # trajectory steps
+MINI_BATCH_SIZE = 32 # caculate loss on one mini batch
 show_every = 20
 obs_dim = env.observation_space.shape[0]
 action_dim = env.action_space.n
@@ -157,6 +158,7 @@ for episode in range(EPISODES):
         masks.append(torch.FloatTensor([1 - done]).unsqueeze(1).to(Device))
         states.append(state)
         actions.append(action.unsqueeze(1).to(Device))
+
         episode_reward += reward
     
         # Update obs
@@ -166,15 +168,15 @@ for episode in range(EPISODES):
 
     returns = compute_gae(next_value, values, rewards, masks)
     returns = torch.cat(returns).detach()
-    returns = normalize(returns)
+    # returns = normalize(returns)
     
-    states = torch.cat(states).detach()
+    states = torch.cat(states)
     actions = torch.cat(actions).detach()
     log_probs = torch.cat(log_probs).detach()
     values = torch.cat(values).detach()
     
     advantages = returns - values
-    advantages = normalize(advantages).detach()
+    advantages = normalize(advantages)
 
     # Learn once
     PPO_update(states, actions, log_probs, returns, advantages)

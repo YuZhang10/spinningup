@@ -62,7 +62,7 @@ def init_weights(m):
         torch.nn.init.xavier_normal_(m.weight)
         m.bias.data.fill_(0)
 
-policy.apply(init_weights)
+# policy.apply(init_weights)
 
 LEARNING_RATE = 0.01
 
@@ -243,8 +243,8 @@ for episode in range(1, MAX_EPISODES+1):
     
         print(f'| Episode: {episode:3} | Mean Train Rewards: {mean_train_rewards:5.1f} | Mean Test Rewards: {mean_test_rewards:5.1f} |')
     
-    # if mean_test_rewards >= REWARD_THRESHOLD:
+    if mean_test_rewards >= REWARD_THRESHOLD:
         
-    #     print(f'Reached reward threshold in {episode} episodes')
+        print(f'Reached reward threshold in {episode} episodes')
         
-    #     break
+        break
