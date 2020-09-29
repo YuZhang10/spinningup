@@ -77,20 +77,19 @@ def ppo_iter(states, actions, log_probs, returns, advantage):
             returns[rand_ids, :], advantage[rand_ids, :]
 
 def PPO_update(states, actions, log_probs, returns, advantages, eps=0.2):
-    for _ in range(EPOCHS):
         # run EPOCHS time on current memeory
-        for mb_states, mb_actions, mb_old_log_probs, mb_returns, mb_advantages in ppo_iter(
-            states, actions, log_probs, returns, advantages):
+    for state, action, old_log_prob, return_, advantage in zip(
+        states, actions, log_probs, returns, advantages):
             # chosen actions
-            new_distributions, new_values = agent(mb_states)
-            new_logp_probs = new_distributions.log_prob(mb_actions.squeeze(-1))
+            new_distribution, new_value = agent(state)
+            new_logp_prob = new_distribution.log_prob(action)
             # old log probability of each action
-            ratios = (new_logp_probs.unsqueeze(-1) - mb_old_log_probs).exp()
+            ratio = (new_logp_prob - old_log_prob).exp()
 
-            p1 = ratios * mb_advantages
-            p2 = torch.clamp(ratios, 1-eps, 1+eps) * mb_advantages
+            p1 = ratio * advantage
+            p2 = torch.clamp(ratio, 1-eps, 1+eps) * advantage
             pi_loss = -torch.min(p1, p2).mean()
-            value_loss = (mb_returns - new_values).pow(2).mean()
+            value_loss = (return_ - new_value).pow(2).mean()
             loss = value_loss + pi_loss
 
             optimizer.zero_grad()
@@ -135,7 +134,7 @@ for episode in range(EPISODES):
     else:
         is_render = False
 
-    for _ in range(PPO_STEPS):
+    while not done:
         # Render
         # if is_render:
         #     env.render("human")
