@@ -75,27 +75,30 @@ class Agent(nn.Module):
         return returns
         
     def learn(self):
-        logp_as = self.logp_as.detach()
+        # old log probability of each action
+        old_logp_as = self.logp_as.detach()
+        # chosen actions
         actions = self.actions.detach()
-        # Learn at end of one episode
-        distributions, _ = self.forward(self.obs)
-        new_logp_as = distributions.log_prob(self.actions)
-        ratio = (new_logp_as - self.logp_as).exp()
+
+        new_distributions, new_values = self.forward(self.obs)
+        new_logp_as = new_distributions.log_prob(actions)
+        ratio = (new_logp_as - old_logp_as).exp()
 
         _, next_value = self.forward(self.next_obs)
-        self.values = self.values.squeeze(-1)
+        new_values = new_values.squeeze(-1)
         returns = self.compute_gae(
-            torch.cat((self.values,next_value)), 
+            torch.cat((new_values,next_value)), 
             self.rewards, 
             self.masks)
-        advantages = returns - self.values
+        returns = returns.detach()
+        advantages = returns - new_values
         advantages = normalize(advantages)
         advantages = advantages.detach()
 
         p1 = ratio * advantages
         p2 = torch.clamp(ratio, 1-self.eps, 1+self.eps)*advantages
         pi_loss = -torch.min(p1,p2).mean()
-        value_loss = (returns - self.values).pow(2).mean()
+        value_loss = (returns - new_values).pow(2).mean()
         loss = value_loss + pi_loss
 
         optimizer.zero_grad()
@@ -115,7 +118,7 @@ env = gym.make('CartPole-v1')
 state = env.reset()
 
 # Learning setting
-lr = 3e-2
+lr = 1e-3
 EPISODES=30000
 GAMMA = 0.99
 hidden_sizes = 128
@@ -167,7 +170,6 @@ for episode in range(EPISODES):
     agent.obs = torch.cat(agent.obs)
     agent.actions = torch.cat(agent.actions)
     agent.logp_as = torch.cat(agent.logp_as)
-    agent.values = torch.cat(agent.values)
 
     # Learn once
     agent.learn()
