@@ -95,13 +95,34 @@ def PPO_update(states, actions, log_probs, returns, advantages, eps=0.2):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-    
+
+def evaluate():
+    agent.eval()
+
+    done = False
+    state = test_env.reset()
+
+    evaluate_rewards = 0
+    while not done:
+        # test_env.render()
+        state = torch.Tensor(state).to(Device)
+        with torch.no_grad():
+            dist, _ = agent(state)
+            action = torch.argmax(dist.logits)
+        next_state, reward, done, _ = test_env.step(action.item())
+        state = next_state
+
+        evaluate_rewards += reward
+        
+    return evaluate_rewards
+
 # Build env
 env = gym.make('CartPole-v1')
+test_env = gym.make("CartPole-v1")
 
 # Learning setting
 lr = 1e-2
-EPISODES=500
+EPISODES = 300
 GAMMA = 0.99
 hidden_sizes = 128
 EPOCHS = 10
@@ -115,6 +136,7 @@ agent = Agent(obs_dim, action_dim, hidden_sizes).to(Device)
 optimizer = Adam(agent.parameters(), lr=lr)
 
 for episode in range(EPISODES):
+    agent.train()
     # For every episode init
     done = False
     state = env.reset()
@@ -180,11 +202,6 @@ for episode in range(EPISODES):
     # Learn once
     PPO_update(states, actions, log_probs, returns, advantages)
 
-    # Update cumulative reward
-    running_reward = 0.05 * episode_reward + (1 - 0.05) * running_reward
+    # Test once
+    print(f"episode_{episode} \t ep_reward = {evaluate()}")
     
-    print(f"episode_{episode} \t ep_reward = {episode_reward}")
-    if running_reward > env.spec.reward_threshold:
-        print("Solved! Running reward is now {} and "
-                "the last episode runs to {} time steps!".format(running_reward, T))
-        break
