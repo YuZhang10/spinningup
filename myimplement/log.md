@@ -9,3 +9,11 @@ pi-loss：
 vf-loss：
     - return，是根据历史数据计算出来的return
     - value，当前的critic给出当前state下的价值
+
+- 测试时action用最大概率的
+train时是按分布随机sample出action，但是在test时，应该用分布中最大的那个。
+记得调换eval()和train()
+
+- Tensor运算时的维度
+一个(32,1)的Tensor -  （32）的Tensor，结果竟然是（32，32）的Tensor
+所以为了保险，建议使用reshape_as函数
