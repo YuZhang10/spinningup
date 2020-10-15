@@ -12,8 +12,11 @@ vf-loss：
 
 - 测试时action用最大概率的
 train时是按分布随机sample出action，但是在test时，应该用分布中最大的那个。
-记得调换eval()和train()
+记得调换.eval()和.train()
 
 - Tensor运算时的维度
 一个(32,1)的Tensor -  （32）的Tensor，结果竟然是（32，32）的Tensor
 所以为了保险，建议使用reshape_as函数
+
+- PPO是on-policy：
+每一次实现完之后，都需要之前存储的结果全部清空。所以每一次学习都是基于上一次交互的经验，而并非过去很久之前的经验。

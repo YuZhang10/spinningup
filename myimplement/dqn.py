@@ -41,7 +41,7 @@ class ReplayMemory:
 # hyper parameters
 EPS_START = 0.9  # e-greedy threshold start value
 EPS_END = 0.05  # e-greedy threshold end value
-EPS_DECAY = 2000  # e-greedy threshold decay
+EPS_DECAY = 200  # e-greedy threshold decay
 GAMMA = 0.99
 LR = 1e-2
 HIDDEN_SIZE = 128
@@ -78,11 +78,11 @@ def learn(cur_episode, target_update_freq=100):
     mini_batch = memory.sample(MINI_BATCH_SIZE)
     mb_state, mb_action, mb_reward, mb_next_state, mb_mask = zip(*mini_batch)
     
-    mb_state = torch.cat(mb_state)
-    mb_action = torch.cat(mb_action)
-    mb_reward = torch.cat(mb_reward)
-    mb_next_state = torch.cat(mb_next_state)
-    mb_mask = torch.cat(mb_mask)
+    mb_state = torch.cat(mb_state).detach()
+    mb_action = torch.cat(mb_action).detach()
+    mb_reward = torch.cat(mb_reward).detach()
+    mb_next_state = torch.cat(mb_next_state).detach()
+    mb_mask = torch.cat(mb_mask).detach()
 
     # Q
     cur_q_value = policy_Q_net(mb_state).gather(1, mb_action)
@@ -141,3 +141,4 @@ if __name__ == '__main__':
 
         if episode % 100 == 0:
             evaluate()
+            policy_Q_net.train()

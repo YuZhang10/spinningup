@@ -100,7 +100,7 @@ for episode in range(EPISODES):
     
     G = torch.tensor(G, dtype=torch.float).to(Device)
     
-    # Update
+    # 每一条轨迹都可以得到一个梯度，这个梯度是把trajectory过程中的每一步的loga都累加起来
     loss = 0
     for g, logp_a in zip(G, logp_as):
         loss += -g * logp_a
